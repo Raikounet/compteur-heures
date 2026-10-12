@@ -162,24 +162,29 @@
             });
 
             try {
-                const entries = performance.getEntriesByType('resource').map(function(r) { return r.name; });
-                const m = entries.find(function(u) { return u.includes('/workers/') || u.includes('/associates/'); });
+                // Détection automatique du matricule de la personne actuellement connectée
+                const entries = performance.getEntriesByType('resource').map(r => r.name);
+                const m = entries.find(u => u.includes('/workers/') || u.includes('/associates/'));
                 let workerId = '';
                 if (m) {
                     const match = m.match(/(?:workers|associates)\/([a-zA-Z0-9\-_]+)/);
                     if (match) workerId = match[1];
                 }
-                const targetUrl = workerId ? 'https://mon.adp.com/time/v3/workers/' + workerId + '/time-off-balances' : 'https://mon.adp.com/time/v3/workers/vguilloteau-6t2/time-off-balances';
-                const res = await fetch(targetUrl, { credentials: 'same-origin' });
-                const str = await res.text();
-                const rm = str.match(/MOBHV2[\s\S]*?"timeValue"\s*:\s*"([+-]?)(\d{1,2}):(\d{2})"/i) || str.match(/Débit\/Crédit[\s\S]*?"timeValue"\s*:\s*"([+-]?)(\d{1,2}):(\d{2})"/i);
-                if (rm) {
-                    d.carrySign = rm[1] === '-' ? '-' : '+';
-                    d.carryH = parseInt(rm[2], 10);
-                    d.carryM = parseInt(rm[3], 10);
+
+                // Appel dynamique avec le matricule détecté uniquement
+                if (workerId) {
+                    const targetUrl = 'https://mon.adp.com/time/v3/workers/' + workerId + '/time-off-balances';
+                    const res = await fetch(targetUrl, { credentials: 'same-origin' });
+                    const str = await res.text();
+                    const rm = str.match(/MOBHV2[\s\S]*?"timeValue"\s*:\s*"([+-]?)(\d{1,2}):(\d{2})"/i) || str.match(/Débit\/Crédit[\s\S]*?"timeValue"\s*:\s*"([+-]?)(\d{1,2}):(\d{2})"/i);
+                    if (rm) {
+                        d.carrySign = rm[1] === '-' ? '-' : '+';
+                        d.carryH = parseInt(rm[2], 10);
+                        d.carryM = parseInt(rm[3], 10);
+                    }
                 }
             } catch (e) {
-                console.warn(e);
+                console.warn('[Compteur ADP] Impossible de récupérer le compteur Débit/Crédit :', e);
             }
 
             const out = JSON.stringify(d);
