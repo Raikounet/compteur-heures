@@ -183,7 +183,7 @@
             }
 
             const out = JSON.stringify(d);
-            const targetUrl = "https://railounet.github.io/compteur-heures/?data=" + encodeURIComponent(out);
+            const targetUrl = "https://raikounet.github.io/compteur-heures/?data=" + encodeURIComponent(out);
 
             window.open(targetUrl, 'compteur_main_window');
             setTimeout(function() {
