@@ -137,3 +137,427 @@
           <input type="number" id="carryM" min="0" max="59" value="0" style="width: 48px; border: 1px solid var(--card-border); background: var(--input-bg); color: var(--text-main); border-radius: 6px; padding: 4px; text-align: center; font-weight: 700;" oninput="onCarryManualInput()"> m
         </div>
       </div>
+      <div class="stat-card">
+        <div class="stat-header">Effectué / Objectif</div>
+        <div class="stat-val" id="totalWorkedVal">00h00</div>
+        <div class="stat-sub" id="targetValLabel">sur 37h00</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-header">Solde Hebdo</div>
+        <div class="stat-val" id="weekBalanceVal">00h00</div>
+        <div class="stat-sub" id="closedDaysLabel">0 jour validé</div>
+      </div>
+      <div class="stat-card highlight">
+        <div class="stat-header" style="color: var(--primary);">Solde Cumulé Total</div>
+        <div class="stat-val" id="cumulatedBalanceVal">00h00</div>
+        <div class="stat-sub" style="color: var(--primary);">Report + Semaine (dont anticipé)</div>
+      </div>
+    </div>
+
+    <div class="progress-container">
+      <div class="progress-header">
+        <span>Progression hebdomadaire</span>
+        <span id="progressLabelPercent">0%</span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" id="progressBar"></div>
+      </div>
+    </div>
+
+    <div id="target-friday-box" class="target-banner"></div>
+    <div class="days-list" id="daysContainer"></div>
+  </div>
+
+  <div id="view-simulator" class="sim-card" style="display: none;">
+    <h3 style="font-size: 1.1rem; margin-bottom: 6px;">🎯 Calcul d'arrivée pour départ ciblé</h3>
+    <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 20px;">Décompte 45 min de pause et indique ton heure d'embauche.</p>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
+      <div class="field"><label>Départ souhaité</label><input type="time" id="simDep" value="16:10" onchange="runSimulator()"></div>
+      <div class="field"><label>Pause (min 45)</label><input type="number" id="simPause" value="45" min="45" step="5" onchange="runSimulator()"></div>
+      <div class="field"><label>Base</label><select id="simTarget" onchange="runSimulator()" style="width: 100%; border: 1px solid var(--card-border); background: var(--input-bg); color: var(--text-main); border-radius: 8px; padding: 8px 10px; font-weight: 600;"><option value="444">37h (07h24)</option><option value="420">35h (07h00)</option></select></div>
+    </div>
+    <div class="sim-result">
+      <div style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: var(--primary);">Heure d'arrivée requise</div>
+      <div id="simResultVal" style="font-size: 2.5rem; font-weight: 900; color: #312e81; margin: 6px 0;">--:--</div>
+      <div id="simWarnVal" class="warn-msg" style="font-size: 0.85rem;"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  window.name = 'compteur_main_window';
+
+  const DAYS = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'];
+  const DEFAULT_STATE = {
+    mode: '37h', vendrediChome: true, carrySign: '+', carryH: 0, carryM: 0,
+    days37: DAYS.map(d => ({ name: d, mIn: '', lOut: '', lIn: '', aOut: '', manual: false, manualH: 7, manualM: 24, isConge: false, absenceStr: '' })),
+    days35: DAYS.map(d => ({ name: d, mIn: '', lOut: '', lIn: '', aOut: '', manual: false, manualH: 7, manualM: 0, isConge: false, absenceStr: '' }))
+  };
+
+  let state = loadState();
+
+  function loadState() { 
+    try { 
+      const s = localStorage.getItem('compteur_heures_store'); 
+      return s ? JSON.parse(s) : DEFAULT_STATE; 
+    } catch (e) { return DEFAULT_STATE; } 
+  }
+  
+  function saveState() { 
+    try { localStorage.setItem('compteur_heures_store', JSON.stringify(state)); } catch (e) {} 
+  }
+
+  function installerTampermonkey() {
+    const ua = navigator.userAgent;
+    let url = 'https://www.tampermonkey.net/';
+
+    if (ua.includes('Edg/')) {
+      url = 'https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd';
+    } else if (ua.includes('Chrome') && !ua.includes('Edg')) {
+      url = 'https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo';
+    } else if (ua.includes('Firefox')) {
+      url = 'https://addons.mozilla.org/fr/firefox/addon/tampermonkey/';
+    }
+
+    window.open(url, '_blank');
+  }
+
+  function t2m(t) { 
+    if (!t) return null; 
+    const [h, m] = t.split(':').map(Number); 
+    return isNaN(h) || isNaN(m) ? null : h * 60 + m; 
+  }
+  
+  function m2t(m) { 
+    if (m === null || isNaN(m)) return '--:--'; 
+    const sign = m < 0 ? '-' : ''; 
+    const abs = Math.abs(m); 
+    return sign + String(Math.floor(abs / 60)).padStart(2, '0') + 'h' + String(abs % 60).padStart(2, '0'); 
+  }
+  
+  function m2time(m) { 
+    if (m === null || isNaN(m)) return '--:--'; 
+    const norm = (m % 1440 + 1440) % 1440; 
+    return String(Math.floor(norm / 60)).padStart(2, '0') + ':' + String(norm % 60).padStart(2, '0'); 
+  }
+  
+  function getTargetPerDay() { return state.mode === '35h' ? 420 : 444; }
+
+  function checkRange(type, timeStr, absenceStr) {
+    if (absenceStr) return '';
+    const m = t2m(timeStr);
+    if (m === null) return '';
+    if (type === 'mIn' && (m < 390 || m > 540)) return 'Plage : 06h30 - 09h00';
+    if ((type === 'lOut' || type === 'lIn') && (m < 720 || m > 840)) return 'Plage : 12h00 - 14h00';
+    if (type === 'aOut' && (m < 960 || m > 1110)) return 'Plage : 16h00 - 18h30';
+    return '';
+  }
+
+  function setTab(tab) {
+    state.mode = tab;
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById(tab === '37h' ? 'tab-btn-37' : tab === '35h' ? 'tab-btn-35' : 'tab-btn-sim').classList.add('active');
+    document.getElementById('view-timesheet').style.display = tab === 'sim' ? 'none' : 'block';
+    document.getElementById('view-simulator').style.display = tab === 'sim' ? 'block' : 'none';
+    document.getElementById('chomage-box').style.display = tab === '35h' ? 'block' : 'none';
+    if (tab === 'sim') runSimulator(); else render();
+    saveState();
+  }
+
+  function toggleCarrySign() { state.carrySign = state.carrySign === '+' ? '-' : '+'; saveState(); render(); }
+  function onCarryManualInput() { state.carryH = parseInt(document.getElementById('carryH').value) || 0; state.carryM = parseInt(document.getElementById('carryM').value) || 0; saveState(); render(); }
+  function toggleVendrediChome() { state.vendrediChome = document.getElementById('vendrediChome').checked; saveState(); render(); }
+  function setDayManual(idx, isManual) { (state.mode === '35h' ? state.days35 : state.days37)[idx].manual = isManual; saveState(); render(); }
+  
+  function fillStandard(idx) { 
+    const d = (state.mode === '35h' ? state.days35 : state.days37)[idx]; 
+    d.manual = true; 
+    d.manualH = 7; 
+    d.manualM = state.mode === '35h' ? 0 : 24; 
+    saveState(); render(); 
+  }
+  
+  function quick45(idx) { 
+    const d = (state.mode === '35h' ? state.days35 : state.days37)[idx]; 
+    const m = t2m(d.lOut); 
+    if (m !== null) { d.lIn = m2time(m + 45); saveState(); render(); } 
+  }
+  
+  function updateField(idx, field, val) { 
+    (state.mode === '35h' ? state.days35 : state.days37)[idx][field] = val; 
+    saveState(); render(); 
+  }
+
+  function resetWeek() { 
+    if (!confirm('Réinitialiser la semaine ?')) return; 
+    state.days37 = DEFAULT_STATE.days37.map(d => ({ ...d })); 
+    state.days35 = DEFAULT_STATE.days35.map(d => ({ ...d })); 
+    state.carryH = 0; state.carryM = 0; state.carrySign = '+';
+    saveState(); render(); 
+  }
+
+  function importDirectData(data) {
+    try {
+      if (!data || data.source !== 'adp' || !data.days) return;
+
+      const list = state.mode === '35h' ? state.days35 : state.days37;
+      const targetPerDay = getTargetPerDay();
+      const todayIdx = (new Date().getDay() + 6) % 7;
+      let sumClosedDeltasBeforeToday = 0;
+
+      DAYS.forEach((dayName, idx) => {
+        const dInfo = data.days[dayName];
+        if (!dInfo) return;
+
+        if (dInfo.isConge) {
+          list[idx].isConge = true;
+          list[idx].manual = true;
+          list[idx].manualH = 7;
+          list[idx].manualM = state.mode === '35h' ? 0 : 24;
+          list[idx].absenceStr = '';
+          list[idx].mIn = ''; list[idx].lOut = ''; list[idx].lIn = ''; list[idx].aOut = '';
+        } else {
+          list[idx].isConge = false;
+          list[idx].absenceStr = dInfo.absenceStr || '';
+
+          if (dInfo.times && dInfo.times.length > 0) {
+            list[idx].manual = false;
+            list[idx].mIn = dInfo.times[0] || '';
+            list[idx].lOut = dInfo.times[1] || '';
+            list[idx].lIn = dInfo.times[2] || '';
+            list[idx].aOut = dInfo.times[3] || '';
+          } else {
+            list[idx].manual = false;
+            list[idx].mIn = ''; list[idx].lOut = ''; list[idx].lIn = ''; list[idx].aOut = '';
+          }
+        }
+
+        if (data.isCurrentWeek && idx < todayIdx && !dInfo.isConge) {
+          let worked = 0;
+          let absMins = 0;
+          if (dInfo.absenceStr && dInfo.absenceStr !== 'Oui') {
+            const matches = Array.from(dInfo.absenceStr.matchAll(/(\d{2}):(\d{2})\s*-\s*(\d{2}):(\d{2})/g));
+            matches.forEach(m => {
+              absMins += (parseInt(m[3], 10) * 60 + parseInt(m[4], 10)) - (parseInt(m[1], 10) * 60 + parseInt(m[2], 10));
+            });
+          }
+
+          const tIn = t2m(list[idx].mIn), tLOut = t2m(list[idx].lOut), tLIn = t2m(list[idx].lIn), tAOut = t2m(list[idx].aOut);
+          if (tIn !== null && tAOut !== null) {
+            let pause = (tLOut !== null && tLIn !== null) ? Math.max(45, tLIn - tLOut) : 45;
+            worked = Math.max(0, (tAOut - tIn) - pause);
+            sumClosedDeltasBeforeToday += (worked + absMins - targetPerDay);
+          }
+        }
+      });
+
+      if (data.isCurrentWeek) {
+        const sign = data.carrySign === '-' ? -1 : 1;
+        const adpMinutes = sign * (((parseInt(data.carryH, 10) || 0) * 60) + (parseInt(data.carryM, 10) || 0));
+        let trueMondayStart = adpMinutes - sumClosedDeltasBeforeToday;
+
+        state.carrySign = trueMondayStart < 0 ? '-' : '+';
+        const absVal = Math.abs(trueMondayStart);
+        state.carryH = Math.floor(absVal / 60);
+        state.carryM = absVal % 60;
+      }
+
+      saveState();
+      render();
+    } catch (err) {
+      console.error('Erreur import direct :', err);
+    }
+  }
+
+  function triggerADPSync() {
+    const ssoUrl = 'https://launcher.myapps.microsoft.com/api/signin/0492d792-ff4a-4120-80b8-74fb2e398a95?tenantId=3396d1c2-ca72-4e87-81c9-c5e42c3f5fdd#auto-sync';
+    window.open(ssoUrl, '_blank');
+  }
+
+  function render() {
+    const targetPerDay = getTargetPerDay(); 
+    const days = state.mode === '35h' ? state.days35 : state.days37;
+    const isChomeFri = state.mode === '35h' && state.vendrediChome;
+    
+    document.getElementById('carrySignBtn').textContent = state.carrySign;
+    document.getElementById('carryH').value = state.carryH; 
+    document.getElementById('carryM').value = state.carryM;
+    document.getElementById('vendrediChome').checked = state.vendrediChome;
+
+    const todayIdx = (new Date().getDay() + 6) % 7;
+    let totalWorked = 0, weekBalance = 0, closedDaysCount = 0, html = '';
+
+    days.forEach((day, idx) => {
+      const isChome = idx === 4 && isChomeFri;
+      let worked = 0, isClosed = false, preDeducted = false;
+      let absMins = 0;
+
+      if (day.absenceStr) {
+        if (day.absenceStr === 'Oui') {
+          absMins = targetPerDay;
+        } else {
+          const matches = Array.from(day.absenceStr.matchAll(/(\d{2}):(\d{2})\s*-\s*(\d{2}):(\d{2})/g));
+          if (matches.length > 0) {
+            matches.forEach(match => {
+              absMins += (parseInt(match[3], 10) * 60 + parseInt(match[4], 10)) - (parseInt(match[1], 10) * 60 + parseInt(match[2], 10));
+            });
+          } else {
+            absMins = targetPerDay;
+          }
+        }
+      }
+
+      if (!isChome) {
+        if (day.manual) {
+          worked = (parseInt(day.manualH) || 0) * 60 + (parseInt(day.manualM) || 0); isClosed = true;
+        } else {
+          const tIn = t2m(day.mIn), tLOut = t2m(day.lOut), tLIn = t2m(day.lIn), tAOut = t2m(day.aOut);
+          const seg1 = (tIn !== null && tLOut !== null) ? Math.max(0, tLOut - tIn) : 0;
+          const seg2 = (tLIn !== null && tAOut !== null) ? Math.max(0, tAOut - tLIn) : 0;
+
+          if (tIn !== null && tLOut !== null && tLIn !== null && tAOut !== null) {
+            let pause = tLIn - tLOut;
+            if (pause < 45 && !day.absenceStr) pause = 45;
+            if (pause < 0) pause = 0;
+            worked = Math.max(0, (tAOut - tIn) - pause);
+            isClosed = true;
+          } else if (tIn !== null && tAOut !== null && tLOut === null && tLIn === null) {
+            worked = Math.max(0, (tAOut - tIn) - (day.absenceStr ? 0 : 45));
+            isClosed = true;
+          } else if (day.absenceStr) {
+            if (tIn !== null && tLOut !== null && tLIn === null && tAOut === null) { worked = seg1; isClosed = true; }
+            else if (tIn === null && tLOut === null && tLIn !== null && tAOut !== null) { worked = seg2; isClosed = true; }
+          }
+        }
+      }
+
+      if (isClosed && !isChome) { 
+        const totalDayTime = worked + absMins; 
+        totalWorked += worked; 
+        weekBalance += (totalDayTime - targetPerDay); 
+        closedDaysCount++; 
+      } else if (!isClosed && !isChome && absMins > 0) {
+        weekBalance -= absMins; 
+        preDeducted = true;
+      }
+
+      let headerClass = '';
+      let headerBadge = '';
+      if (idx === todayIdx) { headerClass = 'today'; headerBadge = '<span class="badge badge-today">Aujourd\'hui</span>'; }
+      if (day.isConge) headerBadge += ' <span class="badge badge-conge">Congé / RTT / Activité Partielle</span>';
+      if (isChome) headerBadge += ' <span class="badge" style="background:var(--warning-light); color:var(--warning); border:1px solid var(--warning-border);">Chômé</span>';
+
+      html += '<div class="day-card ' + headerClass + '">';
+      html += '<div class="day-card-header">';
+      html += '<div class="day-name">' + day.name + ' ' + headerBadge + '</div>';
+      html += '<div>' + (!isChome ? '<button class="btn btn-outline btn-sm" onclick="fillStandard(' + idx + ')">✨ 1-clic</button> <button class="btn btn-outline btn-sm" onclick="setDayManual(' + idx + ', ' + !day.manual + ')">' + (day.manual ? '🕒 Détaillé' : '⚡ Direct') + '</button>' : '') + '</div>';
+      html += '</div>';
+      
+      if (isChome) { 
+        html += '<div style="padding:12px; color:var(--text-muted); font-style:italic;">Non travaillé.</div>'; 
+      } else if (day.manual) {
+        html += '<div style="display:flex; align-items:center; gap:8px; background:var(--input-bg); padding:10px; border-radius:8px;">';
+        html += '<span style="color:var(--text-main);">Comptabilisé :</span>';
+        html += '<input type="number" min="0" max="15" value="' + day.manualH + '" style="width:48px; text-align:center; border:1px solid var(--card-border); background:var(--card-bg); color:var(--text-main); border-radius:6px;" onchange="updateField(' + idx + ', \'manualH\', this.value)"> h';
+        html += '<input type="number" min="0" max="59" value="' + day.manualM + '" style="width:48px; text-align:center; border:1px solid var(--card-border); background:var(--card-bg); color:var(--text-main); border-radius:6px;" onchange="updateField(' + idx + ', \'manualM\', this.value)"> m';
+        html += '<span style="margin-left:auto; font-weight:700; color:' + (worked >= targetPerDay ? 'var(--success)' : 'var(--danger)') + '">' + (worked - targetPerDay >= 0 ? '+' : '') + m2t(worked - targetPerDay) + '</span>';
+        html += '</div>';
+      } else {
+        const wMin = checkRange('mIn', day.mIn, day.absenceStr);
+        const wLOut = checkRange('lOut', day.lOut, day.absenceStr);
+        const wLIn = checkRange('lIn', day.lIn, day.absenceStr);
+        const wAOut = checkRange('aOut', day.aOut, day.absenceStr);
+        
+        if (day.absenceStr) {
+          html += '<div class="absence-badge">🟣 Débit/Crédit posé ' + (day.absenceStr !== 'Oui' ? '(' + day.absenceStr + ') ' : '') + '- Alertes désactivées</div>';
+        }
+
+        html += '<div class="inputs-grid">';
+        html += '<div class="field"><label>Arrivée matin</label><input type="time" class="' + (wMin ? 'warn' : '') + '" value="' + day.mIn + '" onchange="updateField(' + idx + ', \'mIn\', this.value)">' + (wMin ? '<div class="warn-msg">' + wMin + '</div>' : '') + '</div>';
+        html += '<div class="field"><label>Midi départ</label><input type="time" class="' + (wLOut ? 'warn' : '') + '" value="' + day.lOut + '" onchange="updateField(' + idx + ', \'lOut\', this.value)">' + (wLOut ? '<div class="warn-msg">' + wLOut + '</div>' : '') + '</div>';
+        html += '<div class="field"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;"><label style="margin:0;">Midi retour</label>' + (day.lOut && !day.lIn ? '<button onclick="quick45(' + idx + ')" class="btn-sm" style="background:var(--primary-light); color:var(--primary); border:none; cursor:pointer;">+45m</button>' : '') + '</div><input type="time" class="' + (wLIn ? 'warn' : '') + '" value="' + day.lIn + '" onchange="updateField(' + idx + ', \'lIn\', this.value)"></div>';
+        html += '<div class="field"><label>Départ soir</label><input type="time" class="' + (wAOut ? 'warn' : '') + '" value="' + day.aOut + '" onchange="updateField(' + idx + ', \'aOut\', this.value)">' + (wAOut ? '<div class="warn-msg">' + wAOut + '</div>' : '') + '</div>';
+        html += '</div>';
+
+        let adviceHtml = '';
+        if (isClosed) {
+          adviceHtml = '';
+        } else {
+          const tIn = t2m(day.mIn);
+          let idealDep = null;
+          if (tIn !== null) {
+            idealDep = tIn + 45 + targetPerDay - absMins;
+            adviceHtml = '<span style="color:var(--text-main);">Départ conseillé : <strong style="color:var(--primary);">' + m2time(idealDep) + '</strong></span>';
+          } else {
+            adviceHtml = '';
+          }
+        }
+
+        let resultHtml = '';
+        if (isClosed) {
+          const dayTotal = worked + absMins;
+          resultHtml = '<span style="color:var(--text-main);">Fait : <strong>' + m2t(worked) + '</strong> ' + (absMins > 0 ? '+ ' + m2t(absMins) + ' D/C' : '') + ' | </span><strong style="color:' + (dayTotal >= targetPerDay ? 'var(--success)' : 'var(--danger)') + '">' + (dayTotal - targetPerDay >= 0 ? '+' : '') + m2t(dayTotal - targetPerDay) + '</strong>';
+        } else if (preDeducted) {
+          resultHtml = '<span style="color:var(--text-muted);">Anticipé : <strong style="color:var(--danger)">-' + m2t(absMins) + '</strong></span>';
+        } else {
+          resultHtml = '<span style="color:var(--text-muted);">En cours</span>';
+        }
+
+        html += '<div class="card-footer">';
+        html += '<div>' + adviceHtml + '</div>';
+        html += '<div>' + resultHtml + '</div>';
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+
+    document.getElementById('daysContainer').innerHTML = html;
+
+    const totalTarget = (state.mode === '35h' && isChomeFri) ? 1680 : (state.mode === '35h' ? 2100 : 2220);
+    const carryMinutes = (state.carrySign === '+' ? 1 : -1) * (state.carryH * 60 + state.carryM);
+    const cumulatedTotal = weekBalance + carryMinutes;
+    
+    document.getElementById('totalWorkedVal').textContent = m2t(totalWorked);
+    document.getElementById('targetValLabel').textContent = 'sur ' + m2t(totalTarget);
+    document.getElementById('weekBalanceVal').textContent = (weekBalance >= 0 ? '+' : '') + m2t(weekBalance);
+    document.getElementById('weekBalanceVal').className = 'stat-val ' + (weekBalance > 0 ? 'val-plus' : (weekBalance < 0 ? 'val-minus' : 'val-neutral'));
+    document.getElementById('closedDaysLabel').textContent = closedDaysCount + ' jour(s) validé(s)';
+    
+    document.getElementById('cumulatedBalanceVal').textContent = (cumulatedTotal >= 0 ? '+' : '') + m2t(cumulatedTotal);
+    document.getElementById('cumulatedBalanceVal').className = 'stat-val ' + (cumulatedTotal > 0 ? 'val-plus' : (cumulatedTotal < 0 ? 'val-minus' : 'val-neutral'));
+
+    const progressPercent = Math.min(100, Math.max(0, (totalWorked / totalTarget) * 100));
+    document.getElementById('progressBar').style.width = progressPercent + '%';
+    document.getElementById('progressLabelPercent').textContent = Math.round(progressPercent) + '%';
+    document.getElementById('progressBar').style.background = progressPercent >= 100 ? 'var(--success)' : 'var(--primary)';
+
+    document.getElementById('target-friday-box').style.display = 'none';
+  }
+
+  function runSimulator() {
+    const depM = t2m(document.getElementById('simDep').value); 
+    if (depM === null) return;
+    const arrM = depM - Math.max(45, parseInt(document.getElementById('simPause').value) || 45) - (parseInt(document.getElementById('simTarget').value) || 444);
+    document.getElementById('simResultVal').textContent = m2time(arrM);
+    document.getElementById('simWarnVal').textContent = arrM < 390 ? '⚠️ Arrivée calculée avant 06h30.' : arrM > 540 ? '⚠️ Arrivée calculée après 09h00.' : '';
+  }
+
+  function copySummary() { 
+    navigator.clipboard.writeText('Pointage : Réalisé = ' + document.getElementById('totalWorkedVal').textContent + ' | Solde = ' + document.getElementById('cumulatedBalanceVal').textContent).then(() => alert('Copié !')); 
+  }
+
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.has('data')) {
+    try {
+      const parsed = JSON.parse(decodeURIComponent(urlParams.get('data')));
+      window.history.replaceState({}, document.title, window.location.pathname);
+      importDirectData(parsed);
+    } catch (e) {
+      console.error('Erreur parsing data URL :', e);
+    }
+  }
+
+  setTab(state.mode || '37h');
+</script>
+</body>
+</html>
