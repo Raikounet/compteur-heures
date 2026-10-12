@@ -43,6 +43,8 @@
     .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 8px; font-size: 0.82rem; font-weight: 600; cursor: pointer; border: 1px solid transparent; transition: all 0.15s ease; outline: none; text-decoration: none; }
     .btn-primary { background: var(--primary); color: #fff; box-shadow: 0 1px 2px rgba(79,70,229,0.25); }
     .btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); }
+    .btn-sync { background: #059669; color: #fff; font-weight: 700; box-shadow: 0 1px 2px rgba(5,150,105,0.25); }
+    .btn-sync:hover { background: #047857; transform: translateY(-1px); }
     .btn-outline { background: var(--card-bg); border-color: var(--card-border); color: var(--text-muted); }
     .btn-outline:hover { background: var(--footer-bg); color: var(--text-main); border-color: var(--text-muted); }
     .btn-danger-subtle { background: var(--danger-light); color: var(--danger); border-color: var(--danger-border); }
@@ -92,11 +94,10 @@
   <header>
     <div class="brand">
       <h1>⏱️ Compteur d'Heures</h1>
-      <p>Suivi intelligent, synchronisation ADP J-1 & Plages variables</p>
+      <p>Suivi intelligent & synchronisation directe ADP</p>
     </div>
     <div class="header-actions">
-      <a id="adpBookmarklet" class="btn btn-outline" href="#" style="border-style: dashed; cursor: grab;" title="Glisse ce bouton vers ta barre de favoris">⭐ Favori ADP</a>
-      <button class="btn btn-primary" onclick="importFromClipboard()">📥 Importer ADP</button>
+      <button class="btn btn-sync" onclick="triggerADPSync()">⚡ Synchro ADP</button>
       <button class="btn btn-outline" onclick="copySummary()">📋 Copier</button>
       <button class="btn btn-danger-subtle" onclick="resetWeek()">🔄 Réinitialiser</button>
     </div>
@@ -182,6 +183,9 @@
 </div>
 
 <script>
+  // Nom de fenêtre pour permettre le rafraîchissement ciblé depuis ADP
+  window.name = 'compteur_main_window';
+
   const DAYS = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'];
   const DEFAULT_STATE = {
     mode: '37h', vendrediChome: true, carrySign: '+', carryH: 0, carryM: 0,
@@ -349,18 +353,10 @@
     }
   }
 
-  async function importFromClipboard() {
-    let raw = ''; 
-    try { raw = await navigator.clipboard.readText(); } catch (e) { raw = prompt('Colle le texte d\'ADP :'); }
-    if (!raw) return;
-
-    try {
-      const data = JSON.parse(raw);
-      importDirectData(data);
-      alert('✅ Semaine importée avec succès !');
-    } catch (err) { 
-      alert('Erreur lors de l\'import : ' + err.message); 
-    }
+  function triggerADPSync() {
+    // Lance le SSO Microsoft avec le tag auto-sync
+    const ssoUrl = 'https://launcher.myapps.microsoft.com/api/signin/0492d792-ff4a-4120-80b8-74fb2e398a95?tenantId=3396d1c2-ca72-4e87-81c9-c5e42c3f5fdd#auto-sync';
+    window.open(ssoUrl, '_blank');
   }
 
   function render() {
