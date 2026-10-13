@@ -1,19 +1,19 @@
 // ==UserScript==
 // @name         Auto-Export ADP vers Compteur
 // @namespace    http://tampermonkey.net/
-// @version      3.0
-// @description  Bascule sur Fiche de présence, extrait et synchronise directement avec le compteur
+// @version      3.1
+// @description  Synchro automatique uniquement via le bouton du compteur, passif en accès manuel
 // @match        https://mon.adp.com/*
 // @match        https://static.mon.adp.com/*
 // @match        https://*.adp.com/*
 // @match        https://raikounet.github.io/compteur-heures/*
 // @match        https://railounet.github.io/compteur-heures/*
+// @match        *://*/*compteur-heures*
 // @allFrames    true
 // @grant        GM_closeTab
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addValueChangeListener
-// @grant        GM_openInTab
 // @grant        unsafeWindow
 // @run-at       document-body
 // ==/UserScript==
@@ -21,24 +21,25 @@
 (function() {
     'use strict';
 
-    const isCompteurSite = window.location.hostname.includes('github.io');
+    const isSiteCompteur = window.location.href.includes('compteur-heures');
 
     // =========================================================================
-    // PARTIE 1 : EXÉCUTÉE SUR TON SITE (compteur-heures)
+    // 1. SUR LE SITE DU COMPTEUR
     // =========================================================================
-    if (isCompteurSite) {
-        console.log('[Compteur ADP v3.0] Actif sur Compteur d\'Heures.');
+    if (isSiteCompteur) {
+        console.log('[Compteur ADP v3.1] Connecté au site du Compteur.');
 
-        // Arme le mode synchro dès que le bouton "⚡ Synchro ADP" est cliqué
+        // Arme le signal dès qu'on clique sur le bouton de synchro
         document.addEventListener('click', function(e) {
-            if (e.target && e.target.closest('.btn-sync')) {
-                console.log('[Compteur ADP] Synchro demandée. Signal activé.');
-                GM_setValue('adp_sync_signal', Date.now());
+            const btn = e.target && e.target.closest('.btn-sync');
+            if (btn) {
+                console.log('[Compteur ADP] Clic synchro détecté. Signal armé (30s).');
+                GM_setValue('SYNC_ADP_TIMESTAMP', Date.now());
             }
         });
 
-        // Fonction d'injection des données reçues d'ADP
-        function injecterDonnees(raw) {
+        // Réception en direct des données envoyées par ADP (sans aucune pop-up)
+        function appliquerDonnees(raw) {
             if (!raw) return;
             try {
                 const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -47,50 +48,38 @@
                 } else {
                     window.postMessage({ type: 'ADP_DIRECT_IMPORT', data: data }, '*');
                 }
-                console.log('[Compteur ADP] Données ADP synchronisées en direct !');
+                console.log('[Compteur ADP] Données reçues et appliquées.');
             } catch (err) {
                 console.error('[Compteur ADP] Erreur traitement données :', err);
             }
         }
 
-        // Écoute l'arrivée des données transmises par ADP en arrière-plan
-        GM_addValueChangeListener('adp_extracted_payload', function(name, oldVal, newVal) {
+        GM_addValueChangeListener('ADP_DATA_PAYLOAD', function(name, oldVal, newVal) {
             if (newVal) {
-                GM_setValue('adp_extracted_payload', null);
-                injecterDonnees(newVal);
+                GM_setValue('ADP_DATA_PAYLOAD', null);
+                appliquerDonnees(newVal);
             }
         });
-
-        // Vérification de secours
-        setInterval(function() {
-            const p = GM_getValue('adp_extracted_payload');
-            if (p) {
-                GM_setValue('adp_extracted_payload', null);
-                injecterDonnees(p);
-            }
-        }, 500);
 
         return;
     }
 
     // =========================================================================
-    // PARTIE 2 : EXÉCUTÉE SUR ADP
+    // 2. SUR ADP (mon.adp.com)
     // =========================================================================
-    console.log('[Compteur ADP v3.0] Connecté sur ADP :', window.location.href);
+    const syncTime = GM_getValue('SYNC_ADP_TIMESTAMP', 0);
+    const isAutoSync = (Date.now() - syncTime) < 30000; // Valable uniquement 30s après un clic sur le site
 
-    // Vérifie si la synchro a été initiée depuis ton site il y a moins de 45 secondes
-    const lastSignal = GM_getValue('adp_sync_signal', 0);
-    const isAutoSync = (Date.now() - lastSignal) < 45000;
-
+    // SI ACCÈS MANUEL : ON COUPE TOUT
     if (!isAutoSync) {
-        console.log('[Compteur ADP v3.0] Navigation manuelle détectée. Automatisme coupé.');
+        console.log('[Compteur ADP v3.1] Navigation manuelle détectée. Automatisme désactivé, aucun onglet ne sera fermé.');
         surveillerTableau(false);
         return;
     }
 
-    console.log('[Compteur ADP v3.0] Mode auto-sync validé.');
-    // Consomme le signal immédiatement pour que les prochains onglets soient normaux
-    GM_setValue('adp_sync_signal', 0);
+    // SI ACCÈS VIA BOUTON : ON CONSOMME LE SIGNAL IMMÉDIATEMENT
+    console.log('[Compteur ADP v3.1] Mode synchro validé.');
+    GM_setValue('SYNC_ADP_TIMESTAMP', 0);
 
     // Bascule automatique sur l'onglet "Fiche de présence"
     let clickedOnce = false;
@@ -107,7 +96,6 @@
 
         const tab = document.getElementById('sdf-tab-time-timecard');
         if (tab && !clickedOnce) {
-            console.log('[Compteur ADP] Clic sur #sdf-tab-time-timecard...');
             tab.click();
             clickedOnce = true;
             setTimeout(function() { clickedOnce = false; }, 2000);
@@ -137,15 +125,15 @@
                 if (navIntervalToClear) clearInterval(navIntervalToClear);
 
                 if (shouldClose) {
-                    extraireEtTransmettre(true);
+                    extraireEtEnvoyer();
                 } else {
-                    creerBoutonExport();
+                    creerBoutonManuel();
                 }
             }
         }, 500);
     }
 
-    function creerBoutonExport() {
+    function creerBoutonManuel() {
         if (document.getElementById('btn-export-compteur')) return;
 
         const btn = document.createElement('button');
@@ -168,30 +156,18 @@
             fontFamily: 'sans-serif'
         });
 
-        btn.onclick = async () => {
+        btn.onclick = async function() {
             btn.innerHTML = '⏳ Extraction...';
             btn.disabled = true;
-            await extraireEtTransmettre(false);
+            await extraireEtEnvoyer(false);
             btn.innerHTML = '✅ Envoyé';
-            setTimeout(() => { btn.innerHTML = '⏱️ Ouvrir dans Compteur'; btn.disabled = false; }, 2000);
+            setTimeout(function() { btn.innerHTML = '⏱️ Ouvrir dans Compteur'; btn.disabled = false; }, 2000);
         };
 
         (document.body || document.documentElement).appendChild(btn);
     }
 
-    function fermerOngletActuel() {
-        try {
-            if (typeof GM_closeTab === 'function') {
-                GM_closeTab();
-            } else {
-                window.close();
-            }
-        } catch (e) {
-            window.close();
-        }
-    }
-
-    async function extraireEtTransmettre(closeAfter) {
+    async function extraireEtEnvoyer(fermerApres = true) {
         try {
             const d = {
                 source: 'adp',
@@ -234,7 +210,7 @@
                 let c = el;
                 while (c.parentElement && c.parentElement !== document.body) {
                     const p = c.parentElement;
-                    if (map.some(function(o) { return o.d !== m.d && (p.innerText || '').includes(o.d); })) break;
+                    if (map.some(o => o.d !== m.d && (p.innerText || '').includes(o.d))) break;
                     c = p;
                 }
                 const t = c.innerText || '';
@@ -302,20 +278,19 @@
                 console.warn('[Compteur ADP] Solde non récupéré :', e);
             }
 
-            // Transmission directe des données via Tampermonkey
-            GM_setValue('adp_extracted_payload', JSON.stringify(d));
+            // Envoi des données en mémoire à l'onglet du compteur
+            GM_setValue('ADP_DATA_PAYLOAD', JSON.stringify(d));
 
-            if (closeAfter) {
+            // Fermeture de l'onglet ADP uniquement si mode synchro automatique
+            if (fermerApres) {
                 setTimeout(function() {
-                    fermerOngletActuel();
+                    try {
+                        if (typeof GM_closeTab === 'function') GM_closeTab();
+                        else window.close();
+                    } catch (e) {
+                        window.close();
+                    }
                 }, 300);
-            } else {
-                const targetUrl = 'https://raikounet.github.io/compteur-heures/?data=' + encodeURIComponent(JSON.stringify(d));
-                if (typeof GM_openInTab === 'function') {
-                    GM_openInTab(targetUrl, { active: true });
-                } else {
-                    window.open(targetUrl, '_blank');
-                }
             }
 
         } catch (err) {
