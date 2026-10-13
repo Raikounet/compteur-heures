@@ -1,22 +1,44 @@
 // ==UserScript==
 // @name         Auto-Export ADP vers Compteur
 // @namespace    http://tampermonkey.net/
-// @version      2.5
-// @description  Bascule automatiquement sur Fiche de présence, extrait et ferme ADP
-// @match        *://mon.adp.com/*
-// @match        *://static.mon.adp.com/*
-// @match        *://*.adp.com/*
+// @version      2.7
+// @description  Bascule automatiquement sur Fiche de présence, extrait et ferme ADP UNIQUEMENT en mode auto-sync
+// @match        https://mon.adp.com/*
+// @match        https://*.adp.com/*
+// @include      https://mon.adp.com/*
+// @include      https://*.adp.com/*
 // @allFrames    true
 // @grant        GM_closeTab
+// @grant        GM_setValue
+// @grant        GM_getValue
 // @grant        window.close
-// @run-at       document-idle
+// @run-at       document-body
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    console.log('[Compteur ADP v2.5] Script actif sur :', window.location.href);
+    // 1. Détection du mode synchro automatique
+    const urlHasAutoSync = window.location.hash.includes('auto-sync') || window.location.search.includes('auto-sync');
+    if (urlHasAutoSync) {
+        // Mémorise la demande pendant 30 secondes max pour survivre aux redirections SSO
+        GM_setValue('adp_sync_requested_time', Date.now());
+    }
 
+    const lastSyncTime = GM_getValue('adp_sync_requested_time', 0);
+    const isAutoSync = (Date.now() - lastSyncTime) < 30000; // Actif uniquement si déclenché il y a moins de 30s
+
+    // Si on est en accès libre normal, on n'automatise rien
+    if (!isAutoSync) {
+        console.log('[Compteur ADP v2.7] Accès manuel : automatisation désactivée.');
+        // On affiche uniquement le bouton d'export manuel une fois les dates chargées
+        surveillerTableau(false);
+        return;
+    }
+
+    console.log('[Compteur ADP v2.7] Mode synchro automatique actif.');
+
+    // 2. Bascule automatique sur l'onglet "Fiche de présence" (uniquement en auto-sync)
     let clickedOnce = false;
     const tabInterval = setInterval(function() {
         const els = Array.from(document.querySelectorAll('*'));
@@ -31,35 +53,80 @@
 
         const tab = document.getElementById('sdf-tab-time-timecard');
         if (tab && !clickedOnce) {
-            console.log('[Compteur ADP] Onglet #sdf-tab-time-timecard détecté. Clic en cours...');
+            console.log('[Compteur ADP] Onglet #sdf-tab-time-timecard détecté. Clic...');
             tab.click();
             clickedOnce = true;
             setTimeout(function() { clickedOnce = false; }, 2000);
         }
-    }, 600);
+    }, 400);
 
-    let executed = false;
-    const checkInterval = setInterval(function() {
-        if (executed) return;
+    // 3. Surveillance et extraction avec fermeture d'onglet
+    surveillerTableau(true, tabInterval);
 
-        const els = Array.from(document.querySelectorAll('*'));
-        const foundDates = [];
+    function surveillerTableau(shouldClose, navIntervalToClear) {
+        let executed = false;
+        const checkInterval = setInterval(function() {
+            if (executed) return;
 
-        els.forEach(function(e) {
-            if (e.children.length === 0 && e.innerText) {
-                const m = e.innerText.trim().match(/^(\d{2}\/\d{2})$/);
-                if (m && !foundDates.includes(m[1])) foundDates.push(m[1]);
+            const els = Array.from(document.querySelectorAll('*'));
+            const foundDates = [];
+
+            els.forEach(function(e) {
+                if (e.children.length === 0 && e.innerText) {
+                    const m = e.innerText.trim().match(/^(\d{2}\/\d{2})$/);
+                    if (m && !foundDates.includes(m[1])) foundDates.push(m[1]);
+                }
+            });
+
+            if (foundDates.length > 0) {
+                executed = true;
+                clearInterval(checkInterval);
+                if (navIntervalToClear) clearInterval(navIntervalToClear);
+
+                if (shouldClose) {
+                    // Réinitialise le jeton pour ne pas relancer par accident plus tard
+                    GM_setValue('adp_sync_requested_time', 0);
+                    extraireEtRediriger(true);
+                } else {
+                    creerBoutonExport();
+                }
             }
+        }, 500);
+    }
+
+    function creerBoutonExport() {
+        if (document.getElementById('btn-export-compteur')) return;
+
+        const btn = document.createElement('button');
+        btn.id = 'btn-export-compteur';
+        btn.innerHTML = '⏱️ Ouvrir dans Compteur';
+        Object.assign(btn.style, {
+            position: 'fixed',
+            bottom: '24px',
+            right: '24px',
+            zIndex: '2147483647',
+            padding: '10px 16px',
+            backgroundColor: '#4f46e5',
+            color: '#ffffff',
+            border: '2px solid #ffffff',
+            borderRadius: '10px',
+            boxShadow: '0 4px 14px rgba(0,0,0,0.3)',
+            fontSize: '13px',
+            fontWeight: '700',
+            cursor: 'pointer',
+            fontFamily: 'sans-serif'
         });
 
-        if (foundDates.length > 0) {
-            console.log('[Compteur ADP] Tableau de pointage chargé. Dates :', foundDates);
-            executed = true;
-            clearInterval(checkInterval);
-            clearInterval(tabInterval);
-            extraireEtRediriger();
-        }
-    }, 600);
+        btn.onclick = async () => {
+            btn.innerHTML = '⏳ Extraction...';
+            btn.disabled = true;
+            await extraireEtRediriger(false);
+            btn.innerHTML = '✅ Envoyé';
+            setTimeout(() => { btn.innerHTML = '⏱️ Ouvrir dans Compteur'; btn.disabled = false; }, 2000);
+        };
+
+        (document.body || document.documentElement).appendChild(btn);
+    }
 
     function fermerOngletActuel() {
         try {
@@ -73,7 +140,7 @@
         }
     }
 
-    async function extraireEtRediriger() {
+    async function extraireEtRediriger(closeAfter) {
         try {
             const d = {
                 source: 'adp',
@@ -162,16 +229,13 @@
             });
 
             try {
-                // Détection automatique du matricule de la personne actuellement connectée
-                const entries = performance.getEntriesByType('resource').map(r => r.name);
-                const m = entries.find(u => u.includes('/workers/') || u.includes('/associates/'));
+                const entries = performance.getEntriesByType('resource').map(function(r) { return r.name; });
+                const m = entries.find(function(u) { return u.includes('/workers/') || u.includes('/associates/'); });
                 let workerId = '';
                 if (m) {
                     const match = m.match(/(?:workers|associates)\/([a-zA-Z0-9\-_]+)/);
                     if (match) workerId = match[1];
                 }
-
-                // Appel dynamique avec le matricule détecté uniquement
                 if (workerId) {
                     const targetUrl = 'https://mon.adp.com/time/v3/workers/' + workerId + '/time-off-balances';
                     const res = await fetch(targetUrl, { credentials: 'same-origin' });
@@ -184,16 +248,20 @@
                     }
                 }
             } catch (e) {
-                console.warn('[Compteur ADP] Impossible de récupérer le compteur Débit/Crédit :', e);
+                console.warn(e);
             }
 
             const out = JSON.stringify(d);
-            const targetUrl = "https://raikounet.github.io/compteur-heures/?data=" + encodeURIComponent(out);
+            const targetUrl = "https://railounet.github.io/compteur-heures/?data=" + encodeURIComponent(out);
 
-            window.open(targetUrl, 'compteur_main_window');
-            setTimeout(function() {
-                fermerOngletActuel();
-            }, 300);
+            if (closeAfter) {
+                window.open(targetUrl, 'compteur_main_window');
+                setTimeout(function() {
+                    fermerOngletActuel();
+                }, 300);
+            } else {
+                window.open(targetUrl, '_blank');
+            }
 
         } catch (err) {
             console.error('[Compteur ADP] Erreur d\'extraction :', err);
