@@ -1,39 +1,98 @@
 // ==UserScript==
 // @name         Auto-Export ADP vers Compteur
 // @namespace    http://tampermonkey.net/
-// @version      2.8
-// @description  Bascule automatiquement sur Fiche de présence, extrait et ferme ADP UNIQUEMENT lors d'une synchro
+// @version      3.0
+// @description  Bascule sur Fiche de présence, extrait et synchronise directement avec le compteur
 // @match        https://mon.adp.com/*
+// @match        https://static.mon.adp.com/*
 // @match        https://*.adp.com/*
-// @include      https://mon.adp.com/*
-// @include      https://*.adp.com/*
+// @match        https://raikounet.github.io/compteur-heures/*
+// @match        https://railounet.github.io/compteur-heures/*
 // @allFrames    true
 // @grant        GM_closeTab
-// @grant        window.close
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_addValueChangeListener
+// @grant        GM_openInTab
+// @grant        unsafeWindow
 // @run-at       document-body
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    // 1. Détection stricte et isolée à l'onglet courant
-    const hasSyncTrigger = window.location.href.includes('auto-sync');
-    if (hasSyncTrigger) {
-        sessionStorage.setItem('compteur_adp_sync_flag', '1');
+    const isCompteurSite = window.location.hostname.includes('github.io');
+
+    // =========================================================================
+    // PARTIE 1 : EXÉCUTÉE SUR TON SITE (compteur-heures)
+    // =========================================================================
+    if (isCompteurSite) {
+        console.log('[Compteur ADP v3.0] Actif sur Compteur d\'Heures.');
+
+        // Arme le mode synchro dès que le bouton "⚡ Synchro ADP" est cliqué
+        document.addEventListener('click', function(e) {
+            if (e.target && e.target.closest('.btn-sync')) {
+                console.log('[Compteur ADP] Synchro demandée. Signal activé.');
+                GM_setValue('adp_sync_signal', Date.now());
+            }
+        });
+
+        // Fonction d'injection des données reçues d'ADP
+        function injecterDonnees(raw) {
+            if (!raw) return;
+            try {
+                const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                if (typeof unsafeWindow.importDirectData === 'function') {
+                    unsafeWindow.importDirectData(data);
+                } else {
+                    window.postMessage({ type: 'ADP_DIRECT_IMPORT', data: data }, '*');
+                }
+                console.log('[Compteur ADP] Données ADP synchronisées en direct !');
+            } catch (err) {
+                console.error('[Compteur ADP] Erreur traitement données :', err);
+            }
+        }
+
+        // Écoute l'arrivée des données transmises par ADP en arrière-plan
+        GM_addValueChangeListener('adp_extracted_payload', function(name, oldVal, newVal) {
+            if (newVal) {
+                GM_setValue('adp_extracted_payload', null);
+                injecterDonnees(newVal);
+            }
+        });
+
+        // Vérification de secours
+        setInterval(function() {
+            const p = GM_getValue('adp_extracted_payload');
+            if (p) {
+                GM_setValue('adp_extracted_payload', null);
+                injecterDonnees(p);
+            }
+        }, 500);
+
+        return;
     }
 
-    const isAutoSync = sessionStorage.getItem('compteur_adp_sync_flag') === '1';
+    // =========================================================================
+    // PARTIE 2 : EXÉCUTÉE SUR ADP
+    // =========================================================================
+    console.log('[Compteur ADP v3.0] Connecté sur ADP :', window.location.href);
 
-    // Si on est en ouverture manuelle standard, on arrête tout immédiatement
+    // Vérifie si la synchro a été initiée depuis ton site il y a moins de 45 secondes
+    const lastSignal = GM_getValue('adp_sync_signal', 0);
+    const isAutoSync = (Date.now() - lastSignal) < 45000;
+
     if (!isAutoSync) {
-        console.log('[Compteur ADP v2.8] Navigation manuelle détectée. Automatisation coupée.');
+        console.log('[Compteur ADP v3.0] Navigation manuelle détectée. Automatisme coupé.');
         surveillerTableau(false);
         return;
     }
 
-    console.log('[Compteur ADP v2.8] Mode synchro automatique actif sur cet onglet.');
+    console.log('[Compteur ADP v3.0] Mode auto-sync validé.');
+    // Consomme le signal immédiatement pour que les prochains onglets soient normaux
+    GM_setValue('adp_sync_signal', 0);
 
-    // 2. Bascule sur l'onglet "Fiche de présence" (uniquement en mode synchro)
+    // Bascule automatique sur l'onglet "Fiche de présence"
     let clickedOnce = false;
     const tabInterval = setInterval(function() {
         const els = Array.from(document.querySelectorAll('*'));
@@ -48,14 +107,13 @@
 
         const tab = document.getElementById('sdf-tab-time-timecard');
         if (tab && !clickedOnce) {
-            console.log('[Compteur ADP] Onglet #sdf-tab-time-timecard détecté. Clic...');
+            console.log('[Compteur ADP] Clic sur #sdf-tab-time-timecard...');
             tab.click();
             clickedOnce = true;
             setTimeout(function() { clickedOnce = false; }, 2000);
         }
     }, 400);
 
-    // 3. Surveillance du chargement et fermeture
     surveillerTableau(true, tabInterval);
 
     function surveillerTableau(shouldClose, navIntervalToClear) {
@@ -79,8 +137,7 @@
                 if (navIntervalToClear) clearInterval(navIntervalToClear);
 
                 if (shouldClose) {
-                    sessionStorage.removeItem('compteur_adp_sync_flag');
-                    extraireEtRediriger(true);
+                    extraireEtTransmettre(true);
                 } else {
                     creerBoutonExport();
                 }
@@ -114,7 +171,7 @@
         btn.onclick = async () => {
             btn.innerHTML = '⏳ Extraction...';
             btn.disabled = true;
-            await extraireEtRediriger(false);
+            await extraireEtTransmettre(false);
             btn.innerHTML = '✅ Envoyé';
             setTimeout(() => { btn.innerHTML = '⏱️ Ouvrir dans Compteur'; btn.disabled = false; }, 2000);
         };
@@ -134,7 +191,7 @@
         }
     }
 
-    async function extraireEtRediriger(closeAfter) {
+    async function extraireEtTransmettre(closeAfter) {
         try {
             const d = {
                 source: 'adp',
@@ -177,7 +234,7 @@
                 let c = el;
                 while (c.parentElement && c.parentElement !== document.body) {
                     const p = c.parentElement;
-                    if (map.some(o => o.d !== m.d && (p.innerText || '').includes(o.d))) break;
+                    if (map.some(function(o) { return o.d !== m.d && (p.innerText || '').includes(o.d); })) break;
                     c = p;
                 }
                 const t = c.innerText || '';
@@ -242,19 +299,23 @@
                     }
                 }
             } catch (e) {
-                console.warn(e);
+                console.warn('[Compteur ADP] Solde non récupéré :', e);
             }
 
-            const out = JSON.stringify(d);
-            const targetUrl = "https://railounet.github.io/compteur-heures/?data=" + encodeURIComponent(out);
+            // Transmission directe des données via Tampermonkey
+            GM_setValue('adp_extracted_payload', JSON.stringify(d));
 
             if (closeAfter) {
-                window.open(targetUrl, 'compteur_main_window');
                 setTimeout(function() {
                     fermerOngletActuel();
                 }, 300);
             } else {
-                window.open(targetUrl, '_blank');
+                const targetUrl = 'https://raikounet.github.io/compteur-heures/?data=' + encodeURIComponent(JSON.stringify(d));
+                if (typeof GM_openInTab === 'function') {
+                    GM_openInTab(targetUrl, { active: true });
+                } else {
+                    window.open(targetUrl, '_blank');
+                }
             }
 
         } catch (err) {
