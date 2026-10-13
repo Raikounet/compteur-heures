@@ -1,16 +1,14 @@
 // ==UserScript==
 // @name         Auto-Export ADP vers Compteur
 // @namespace    http://tampermonkey.net/
-// @version      2.7
-// @description  Bascule automatiquement sur Fiche de présence, extrait et ferme ADP UNIQUEMENT en mode auto-sync
+// @version      2.8
+// @description  Bascule automatiquement sur Fiche de présence, extrait et ferme ADP UNIQUEMENT lors d'une synchro
 // @match        https://mon.adp.com/*
 // @match        https://*.adp.com/*
 // @include      https://mon.adp.com/*
 // @include      https://*.adp.com/*
 // @allFrames    true
 // @grant        GM_closeTab
-// @grant        GM_setValue
-// @grant        GM_getValue
 // @grant        window.close
 // @run-at       document-body
 // ==/UserScript==
@@ -18,27 +16,24 @@
 (function() {
     'use strict';
 
-    // 1. Détection du mode synchro automatique
-    const urlHasAutoSync = window.location.hash.includes('auto-sync') || window.location.search.includes('auto-sync');
-    if (urlHasAutoSync) {
-        // Mémorise la demande pendant 30 secondes max pour survivre aux redirections SSO
-        GM_setValue('adp_sync_requested_time', Date.now());
+    // 1. Détection stricte et isolée à l'onglet courant
+    const hasSyncTrigger = window.location.href.includes('auto-sync');
+    if (hasSyncTrigger) {
+        sessionStorage.setItem('compteur_adp_sync_flag', '1');
     }
 
-    const lastSyncTime = GM_getValue('adp_sync_requested_time', 0);
-    const isAutoSync = (Date.now() - lastSyncTime) < 30000; // Actif uniquement si déclenché il y a moins de 30s
+    const isAutoSync = sessionStorage.getItem('compteur_adp_sync_flag') === '1';
 
-    // Si on est en accès libre normal, on n'automatise rien
+    // Si on est en ouverture manuelle standard, on arrête tout immédiatement
     if (!isAutoSync) {
-        console.log('[Compteur ADP v2.7] Accès manuel : automatisation désactivée.');
-        // On affiche uniquement le bouton d'export manuel une fois les dates chargées
+        console.log('[Compteur ADP v2.8] Navigation manuelle détectée. Automatisation coupée.');
         surveillerTableau(false);
         return;
     }
 
-    console.log('[Compteur ADP v2.7] Mode synchro automatique actif.');
+    console.log('[Compteur ADP v2.8] Mode synchro automatique actif sur cet onglet.');
 
-    // 2. Bascule automatique sur l'onglet "Fiche de présence" (uniquement en auto-sync)
+    // 2. Bascule sur l'onglet "Fiche de présence" (uniquement en mode synchro)
     let clickedOnce = false;
     const tabInterval = setInterval(function() {
         const els = Array.from(document.querySelectorAll('*'));
@@ -60,7 +55,7 @@
         }
     }, 400);
 
-    // 3. Surveillance et extraction avec fermeture d'onglet
+    // 3. Surveillance du chargement et fermeture
     surveillerTableau(true, tabInterval);
 
     function surveillerTableau(shouldClose, navIntervalToClear) {
@@ -84,8 +79,7 @@
                 if (navIntervalToClear) clearInterval(navIntervalToClear);
 
                 if (shouldClose) {
-                    // Réinitialise le jeton pour ne pas relancer par accident plus tard
-                    GM_setValue('adp_sync_requested_time', 0);
+                    sessionStorage.removeItem('compteur_adp_sync_flag');
                     extraireEtRediriger(true);
                 } else {
                     creerBoutonExport();
@@ -183,7 +177,7 @@
                 let c = el;
                 while (c.parentElement && c.parentElement !== document.body) {
                     const p = c.parentElement;
-                    if (map.some(function(o) { return o.d !== m.d && (p.innerText || '').includes(o.d); })) break;
+                    if (map.some(o => o.d !== m.d && (p.innerText || '').includes(o.d))) break;
                     c = p;
                 }
                 const t = c.innerText || '';
