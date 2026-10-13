@@ -18,6 +18,8 @@
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @run-at       document-body
+// @updateURL    https://raw.githubusercontent.com/Raikounet/compteur-heures/main/adp-sync.user.js
+// @downloadURL  https://raw.githubusercontent.com/Raikounet/compteur-heures/main/adp-sync.user.js
 // ==/UserScript==
 
 (function() {
