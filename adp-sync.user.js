@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto-Export ADP vers Compteur
 // @namespace    http://tampermonkey.net/
-// @version      3.2
+// @version      3.3
 // @description  Synchro automatique via le bouton du compteur, passif en manuel, avec coupe-circuit distant
 // @match        https://mon.adp.com/*
 // @match        https://static.mon.adp.com/*
@@ -53,7 +53,7 @@
 
     verifierStatutDistant(function(estActif) {
         if (!estActif) {
-            console.warn('[Compteur ADP v3.2] Script désactivé à distance via status.json.');
+            console.warn('[Compteur ADP v3.3] Script désactivé à distance via status.json.');
             return;
         }
         demarrerApplication();
@@ -66,7 +66,7 @@
         // A. SITE COMPTEUR D'HEURES
         // =========================================================================
         if (isSiteCompteur) {
-            console.log('[Compteur ADP v3.2] Connecté au site du Compteur.');
+            console.log('[Compteur ADP v3.3] Connecté au site du Compteur.');
 
             document.addEventListener('click', function(e) {
                 const btn = e.target && e.target.closest('.btn-sync');
@@ -108,12 +108,12 @@
         const isAutoSync = (Date.now() - syncTime) < 30000;
 
         if (!isAutoSync) {
-            console.log('[Compteur ADP v3.2] Navigation manuelle. Automatisme désactivé, aucun onglet ne sera fermé.');
+            console.log('[Compteur ADP v3.3] Navigation manuelle. Automatisme désactivé, aucun onglet ne sera fermé.');
             surveillerTableau(false);
             return;
         }
 
-        console.log('[Compteur ADP v3.2] Mode auto-sync validé.');
+        console.log('[Compteur ADP v3.3] Mode auto-sync validé.');
         GM_setValue('SYNC_ADP_TIMESTAMP', 0);
 
         let clickedOnce = false;
@@ -173,22 +173,74 @@
             const btn = document.createElement('button');
             btn.id = 'btn-export-compteur';
             btn.innerHTML = '⏱️ Ouvrir dans Compteur';
-            Object.assign(btn.style, {
-                position: 'fixed',
-                bottom: '24px',
-                right: '24px',
-                zIndex: '2147483647',
-                padding: '10px 16px',
-                backgroundColor: '#4f46e5',
-                color: '#ffffff',
-                border: '2px solid #ffffff',
-                borderRadius: '10px',
-                boxShadow: '0 4px 14px rgba(0,0,0,0.3)',
-                fontSize: '13px',
-                fontWeight: '700',
-                cursor: 'pointer',
-                fontFamily: 'sans-serif'
-            });
+
+            // Sélecteurs d'ancrage pour le bandeau supérieur d'ADP
+            const searchInput = document.querySelector('input[type="search"]') || document.querySelector('input[placeholder*="Recherch" i]') || document.querySelector('input[id*="search" i]');
+            const headerBar = document.querySelector('header') || document.querySelector('nav') || document.querySelector('[role="banner"]') || (searchInput ? searchInput.closest('div') : null);
+
+            if (searchInput && searchInput.parentElement) {
+                // Injection propre juste à côté de la barre de recherche
+                Object.assign(btn.style, {
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginLeft: '12px',
+                    padding: '6px 14px',
+                    height: '32px',
+                    backgroundColor: '#4f46e5',
+                    color: '#ffffff',
+                    border: '1px solid rgba(255, 255, 255, 0.4)',
+                    borderRadius: '6px',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                    fontSize: '12px',
+                    fontWeight: '700',
+                    cursor: 'pointer',
+                    fontFamily: 'sans-serif',
+                    verticalAlign: 'middle',
+                    whiteSpace: 'nowrap',
+                    zIndex: '9999'
+                });
+                searchInput.parentElement.appendChild(btn);
+            } else if (headerBar) {
+                // Injection dans le conteneur du header
+                Object.assign(btn.style, {
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginRight: '16px',
+                    padding: '6px 14px',
+                    height: '32px',
+                    backgroundColor: '#4f46e5',
+                    color: '#ffffff',
+                    border: '1px solid rgba(255, 255, 255, 0.4)',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    fontWeight: '700',
+                    cursor: 'pointer',
+                    fontFamily: 'sans-serif',
+                    zIndex: '9999'
+                });
+                headerBar.appendChild(btn);
+            } else {
+                // Repli : bandeau supérieur fixe (top-right) sans masquer le contenu
+                Object.assign(btn.style, {
+                    position: 'fixed',
+                    top: '8px',
+                    right: '120px',
+                    zIndex: '2147483647',
+                    padding: '6px 14px',
+                    backgroundColor: '#4f46e5',
+                    color: '#ffffff',
+                    border: '1px solid #ffffff',
+                    borderRadius: '6px',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+                    fontSize: '12px',
+                    fontWeight: '700',
+                    cursor: 'pointer',
+                    fontFamily: 'sans-serif'
+                });
+                (document.body || document.documentElement).appendChild(btn);
+            }
 
             btn.onclick = async function() {
                 btn.innerHTML = '⏳ Extraction...';
@@ -197,8 +249,6 @@
                 btn.innerHTML = '✅ Envoyé';
                 setTimeout(function() { btn.innerHTML = '⏱️ Ouvrir dans Compteur'; btn.disabled = false; }, 2000);
             };
-
-            (document.body || document.documentElement).appendChild(btn);
         }
 
         async function extraireEtEnvoyer(fermerApres = true) {
